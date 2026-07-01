@@ -56,17 +56,11 @@ news-reader/
 - Deduplication by link content hash
 
 ### 5. summarizer.py
-- Uses `llama-cpp-python` (CPU, pre-built wheels, no compilation needed)
-- Produces both **summary** and **keywords/topics** from the article text in a single LLM call
-- Deployed prompt:
-  > "Summarize this news article in 2-3 sentences and extract 3-5 key topics/keywords.\n\nArticle:\n{text}\n\nSummary:\nKeywords:"
-- LLM response is parsed into two fields: summary text + keyword list
-- Configurable model and prompt template
-- Recommended models (GGUF Q4_K_M):
-  - **Qwen2.5-0.5B-Instruct** (~350MB) — minimum viable
-  - **Llama-3.2-1B-Instruct** (~800MB) — better quality
-- Model files stored in a `models/` directory (not tracked in git)
-- Optional: offline/batch summarization after fetch
+- Uses `transformers` with two models:
+  - **utrobinmv/t5_summary_en_ru_zh_base_2048** (T5-base, 0.3B params) — summarization in EN/RU/ZH via `summary:` prefix
+  - **agentlans/flan-t5-small-keywords** (FLAN-T5-small, 77M params) — English keyword extraction, lazy-loaded on first use
+- Both models cached locally after first download (~1GB total on disk)
+- Fast on CPU (~1-5s per article for summary, +1-2s for keywords)
 
 ### 6. storage.py
 - **SQLite** via `sqlite3` (stdlib)
@@ -168,7 +162,12 @@ dependencies = [
     "feedparser>=6.0",
     "trafilatura>=1.6",
     "beautifulsoup4>=4.12",
-    "llama-cpp-python>=0.2",
+    "transformers>=4.30",
+    "torch>=2.0",
+    "protobuf>=3.20",
+    "sentencepiece>=0.1",
+    "protobuf>=3.20",
+    "sentencepiece>=0.1",
     "typer>=0.9",
     "rich>=13.0",
     "pyyaml>=6.0",

@@ -23,13 +23,12 @@ def _defaults() -> dict[str, Any]:
     return {
         "db_path": str(DATA_DIR / "news_reader.db"),
         "model": {
-            "path": str(Path(__file__).resolve().parent.parent.parent / "models" / "model.gguf"),
+            "path": "utrobinmv/t5_summary_en_ru_zh_base_2048",
             "n_ctx": 2048,
             "n_threads": 4,
         },
         "summarizer": {
-            "prompt": "Summarize this news article in 2-3 sentences and extract 3-5 key topics/keywords.\n\nArticle:\n{text}\n\nSummary:\nKeywords:",
-            "max_tokens": 256,
+            "max_tokens": 80,
             "temperature": 0.3,
         },
         "ranking": {

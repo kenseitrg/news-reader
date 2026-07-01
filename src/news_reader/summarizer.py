@@ -1,90 +1,106 @@
-"""LLM-based article summarization and keyword extraction via llama-cpp-python."""
+"""Article summarization and keyword extraction using T5 models."""
 
 import logging
-import re
 from typing import Any
 
-from llama_cpp import Llama
+import torch
+from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
 logger = logging.getLogger(__name__)
 
-_PROMPT_TEMPLATE = (
-    "<|im_start|>system\n"
-    "You are a helpful assistant that summarizes news articles.<|im_end|>\n"
-    "<|im_start|>user\n"
-    "Article: {text}\n\n"
-    "Give me a 2-3 sentence summary of this article "
-    "and list 3-5 key topics or keywords.\n"
-    "Summary:\n"
-    "Keywords:<|im_end|>\n"
-    "<|im_start|>assistant\n"
-)
+SUM_MODEL = "utrobinmv/t5_summary_en_ru_zh_base_2048"
+KW_MODEL = "agentlans/flan-t5-small-keywords"
 
 
 class Summarizer:
-    """Generate summaries and keywords from article text using a local LLM."""
+    """Generate summaries and extract keywords from article text."""
 
     def __init__(
         self,
-        model_path: str,
+        model_path: str | None = None,
         n_ctx: int = 2048,
         n_threads: int | None = None,
-        max_tokens: int = 256,
+        max_tokens: int = 80,
         temperature: float = 0.3,
     ) -> None:
-        kwargs: dict[str, Any] = {
-            "n_ctx": n_ctx,
-            "verbose": False,
-        }
-        if n_threads:
-            kwargs["n_threads"] = n_threads
+        name = model_path or SUM_MODEL
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
-        self.llm = Llama(model_path=model_path, **kwargs)
+        # Summarization model
+        self.tokenizer = AutoTokenizer.from_pretrained(name)
+        self.model = AutoModelForSeq2SeqLM.from_pretrained(name).to(self.device)
+
+        # Keyword extraction model (lazy-loaded on first use)
+        self._kw_tokenizer: Any = None
+        self._kw_model: Any = None
+
+        self.max_input_length = n_ctx
         self.max_tokens = max_tokens
         self.temperature = temperature
+
+        self.model.generation_config.max_length = None
+        self.model.generation_config.max_new_tokens = None
+
+    def _lazy_load_kw(self) -> None:
+        if self._kw_model is not None:
+            return
+        self._kw_tokenizer = AutoTokenizer.from_pretrained(KW_MODEL)
+        self._kw_model = AutoModelForSeq2SeqLM.from_pretrained(KW_MODEL).to(self.device)
 
     def summarize(self, text: str) -> tuple[str, list[str]]:
         """Return (summary, list_of_keywords) for the given article text."""
         if not text or not text.strip():
             return "", []
 
-        truncated = self._truncate(text, self.llm.n_ctx() - self.max_tokens - 100)
-        prompt = _PROMPT_TEMPLATE.format(text=truncated)
-
-        try:
-            output = self.llm(
-                prompt,
-                max_tokens=self.max_tokens,
-                temperature=self.temperature,
-                stop=["<|im_end|>", "\n\n\n"],
-            )
-            raw = output["choices"][0]["text"].strip()
-            return self._parse_output(raw)
-        except Exception:
-            logger.exception("LLM summarization failed")
-            return "", []
-
-    @staticmethod
-    def _truncate(text: str, max_chars: int) -> str:
-        if len(text) <= max_chars:
-            return text
-        return text[: max(max_chars - 50, 0)] + "..."
-
-    @staticmethod
-    def _parse_output(raw: str) -> tuple[str, list[str]]:
-        parts = re.split(r"\bKeywords:\s*", raw, maxsplit=1, flags=re.IGNORECASE)
-        summary = parts[0].strip()
-        summary = re.sub(r"^Summary:\s*", "", summary, flags=re.IGNORECASE).strip()
-        # Strip leftover prompt artifacts
-        summary = re.sub(r"\b(key topics?|keywords?)\s*.*", "", summary, flags=re.IGNORECASE).strip()
-
-        keywords: list[str] = []
-        if len(parts) > 1:
-            raw_keywords = parts[1]
-            keywords = [
-                k.strip().lower().strip(".")
-                for k in re.split(r"[,;]", raw_keywords)
-                if k.strip()
-            ]
-
+        summary = self._generate_summary(text)
+        keywords = self._extract_keywords(text)
         return summary, keywords
+
+    def _generate_summary(self, text: str) -> str:
+        prompt = f"summary: {text}"
+        return self._generate(self.tokenizer, self.model, prompt, self.max_tokens)
+
+    def _extract_keywords(self, text: str) -> list[str]:
+        self._lazy_load_kw()
+        # FLAN-T5-small max position embeddings = 512
+        prompt = text
+        raw = self._generate(self._kw_tokenizer, self._kw_model, prompt, 128, 512)
+        if not raw:
+            return []
+        seen: set[str] = set()
+        result: list[str] = []
+        for kw in raw.split("||"):
+            kw = kw.strip().lower()
+            if kw and kw not in seen:
+                seen.add(kw)
+                result.append(kw)
+        return result[:10]
+
+    def _generate(
+        self,
+        tokenizer: Any,
+        model: Any,
+        prompt: str,
+        max_new: int,
+        max_input_length: int | None = None,
+    ) -> str:
+        inputs = tokenizer(
+            prompt,
+            return_tensors="pt",
+            max_length=max_input_length or self.max_input_length,
+            truncation=True,
+        ).to(self.device)
+
+        gen_kwargs: dict[str, Any] = {
+            "max_new_tokens": max_new,
+            "num_beams": 2,
+            "early_stopping": True,
+        }
+        if self.temperature > 0:
+            gen_kwargs["do_sample"] = True
+            gen_kwargs["temperature"] = self.temperature
+
+        with torch.no_grad():
+            outputs = model.generate(**inputs, **gen_kwargs)
+
+        return tokenizer.decode(outputs[0], skip_special_tokens=True).strip()

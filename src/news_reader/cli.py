@@ -74,15 +74,18 @@ def list_(
     table.add_column("Source")
     table.add_column("Title")
     table.add_column("Summary")
+    table.add_column("Keywords")
     table.add_column("Published")
 
     for i, article in enumerate(articles[:limit], 1):
         summary = (article.get("summary") or "")[:60]
+        keywords = (article.get("keywords") or "")[:40]
         table.add_row(
             str(i),
             article.get("source_name", ""),
             article["title"][:80],
             summary,
+            keywords,
             (article.get("published_at") or "")[:10],
         )
     console.print(table)
