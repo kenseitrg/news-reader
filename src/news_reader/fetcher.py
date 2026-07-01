@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import feedparser
 import httpx
 from bs4 import BeautifulSoup
+from trafilatura import extract
 
 from news_reader.sources import Source
 
@@ -88,6 +89,21 @@ def _parse_hacker_news(body: str, source_id: int) -> list[dict]:
 
     articles.sort(key=lambda a: int(a["summary"].split()[1]), reverse=True)
     return articles
+
+
+async def fetch_article_content(url: str, client: httpx.AsyncClient) -> str | None:
+    """Download a single article page and extract readable text."""
+    try:
+        resp = await client.get(
+            url,
+            timeout=30,
+            headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"},
+        )
+        resp.raise_for_status()
+        text = extract(resp.text)
+        return text.strip() if text else None
+    except Exception:
+        return None
 
 
 def _parse_dtf(html: str, source_id: int, url: str) -> list[dict]:

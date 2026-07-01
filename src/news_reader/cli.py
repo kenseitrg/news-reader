@@ -8,9 +8,10 @@ from rich.console import Console
 from rich.table import Table
 
 from news_reader.config import load as load_config
-from news_reader.fetcher import fetch_rss, fetch_scrape
+from news_reader.fetcher import fetch_article_content, fetch_rss, fetch_scrape
 from news_reader.sources import source_from_row
 from news_reader.storage import Storage
+from news_reader.summarizer import Summarizer
 
 console = Console()
 app = typer.Typer()
@@ -46,6 +47,12 @@ def fetch() -> None:
         return total
 
     total_new = asyncio.run(_fetch_all())
+
+    if total_new > 0:
+        console.print()
+        summarized = _summarize_new(storage, config)
+        console.print(f"[green]Summarized {summarized} articles.[/green]")
+
     console.print(f"[green]Done. {total_new} new articles.[/green]")
 
 
@@ -66,13 +73,16 @@ def list_(
     table.add_column("#", style="dim")
     table.add_column("Source")
     table.add_column("Title")
+    table.add_column("Summary")
     table.add_column("Published")
 
     for i, article in enumerate(articles[:limit], 1):
+        summary = (article.get("summary") or "")[:60]
         table.add_row(
             str(i),
             article.get("source_name", ""),
             article["title"][:80],
+            summary,
             (article.get("published_at") or "")[:10],
         )
     console.print(table)
@@ -144,6 +154,59 @@ def source_remove(
     storage = Storage(config["db_path"])
     storage.remove_source(source_id)
     console.print(f"[green]Removed source {source_id}[/green]")
+
+
+def _summarize_new(storage: Storage, config: dict, force: bool = False) -> int:
+    """Summarize articles that don't have a meaningful summary yet."""
+    to_summarize = storage.get_articles_without_summaries(force=force)
+    if not to_summarize:
+        return 0
+
+    model_cfg = config.get("model", {})
+    model_path = model_cfg.get("path", "models/model.gguf")
+    summarizer_cfg = config.get("summarizer", {})
+
+    try:
+        summarizer = Summarizer(
+            model_path=model_path,
+            n_ctx=model_cfg.get("n_ctx", 2048),
+            n_threads=model_cfg.get("n_threads"),
+            max_tokens=summarizer_cfg.get("max_tokens", 256),
+            temperature=summarizer_cfg.get("temperature", 0.3),
+        )
+    except Exception as exc:
+        console.print(f"[red]Failed to load model: {exc}[/red]")
+        return 0
+
+    async def _fetch_and_summarize() -> int:
+        done = 0
+        async with httpx.AsyncClient() as client:
+            for article in to_summarize:
+                console.print(f"  Fetching content: {article['title'][:60]}...")
+                content = await fetch_article_content(article["link"], client)
+                if not content:
+                    continue
+
+                console.print("  Summarizing...")
+                summary, keywords = summarizer.summarize(content)
+                if summary:
+                    kw_str = ",".join(keywords) if keywords else None
+                    storage.update_article_summary(article["id"], summary, kw_str)
+                    done += 1
+        return done
+
+    return asyncio.run(_fetch_and_summarize())
+
+
+@app.command()
+def summarize(
+    force: Annotated[bool, typer.Option("--force", "-f", help="Re-summarize all articles")] = False,
+) -> None:
+    """Summarize articles without a meaningful summary."""
+    config = load_config()
+    storage = Storage(config["db_path"])
+    count = _summarize_new(storage, config, force=force)
+    console.print(f"[green]Summarized {count} articles.[/green]")
 
 
 if __name__ == "__main__":

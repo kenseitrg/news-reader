@@ -150,6 +150,33 @@ class Storage:
 
     # --- interactions ---
 
+    def get_articles_without_summaries(self, force: bool = False) -> list[dict[str, Any]]:
+        with self._conn() as conn:
+            if force:
+                rows = conn.execute(
+                    """SELECT a.*, s.name as source_name
+                       FROM articles a
+                       JOIN sources s ON a.source_id = s.id
+                       ORDER BY a.published_at DESC"""
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """SELECT a.*, s.name as source_name
+                       FROM articles a
+                       JOIN sources s ON a.source_id = s.id
+                       WHERE a.summary IS NULL OR a.summary = ''
+                          OR a.summary LIKE 'Score:%'
+                       ORDER BY a.published_at DESC"""
+                ).fetchall()
+            return [dict(r) for r in rows]
+
+    def update_article_summary(self, article_id: int, summary: str, keywords: str | None) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE articles SET summary = ?, keywords = ? WHERE id = ?",
+                (summary, keywords, article_id),
+            )
+
     def set_interaction(self, article_id: int, liked: bool | None) -> None:
         with self._conn() as conn:
             conn.execute(
