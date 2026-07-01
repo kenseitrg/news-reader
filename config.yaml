@@ -1,0 +1,20 @@
+db_path: data/news_reader.db
+
+model:
+  path: models/model.gguf
+  n_ctx: 2048
+  n_threads: 4
+
+summarizer:
+  prompt: "Summarize this news article in 2-3 sentences and extract 3-5 key topics/keywords.\n\nArticle:\n{text}\n\nSummary:\nKeywords:"
+  max_tokens: 256
+  temperature: 0.3
+
+ranking:
+  freshness_weight: 0.4
+  source_weight: 0.3
+  keyword_weight: 0.2
+  author_weight: 0.1
+  auto_filter_threshold: 0.0
+
+sources: []
