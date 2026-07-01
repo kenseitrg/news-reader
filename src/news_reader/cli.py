@@ -1,10 +1,15 @@
 from typing import Annotated, Optional
 
+import asyncio
+
+import httpx
 import typer
 from rich.console import Console
 from rich.table import Table
 
 from news_reader.config import load as load_config
+from news_reader.fetcher import fetch_rss, fetch_scrape
+from news_reader.sources import source_from_row
 from news_reader.storage import Storage
 
 console = Console()
@@ -15,11 +20,36 @@ app = typer.Typer()
 def fetch() -> None:
     """Fetch new articles from all enabled sources."""
     config = load_config()
-    Storage(config["db_path"])
-    console.print("[yellow]Fetching articles...[/yellow]")
+    storage = Storage(config["db_path"])
+    sources = [source_from_row(s) for s in storage.get_sources(enabled_only=True)]
+
+    if not sources:
+        console.print("[yellow]No enabled sources. Add one first.[/yellow]")
+        raise typer.Exit()
+
+    async def _fetch_all() -> int:
+        total = 0
+        async with httpx.AsyncClient() as client:
+            for source in sources:
+                if source.type == "rss":
+                    articles = await fetch_rss(source, client)
+                else:
+                    articles = await fetch_scrape(source, client)
+
+                new_count = 0
+                for article in articles:
+                    if storage.add_article(article):
+                        new_count += 1
+
+                console.print(f"  {source.name}: {len(articles)} found, {new_count} new")
+                total += new_count
+        return total
+
+    total_new = asyncio.run(_fetch_all())
+    console.print(f"[green]Done. {total_new} new articles.[/green]")
 
 
-@app.command()
+@app.command(name="list")
 def list_(
     limit: Annotated[int, typer.Option("--limit", "-l", help="Max articles to show")] = 20,
 ) -> None:
