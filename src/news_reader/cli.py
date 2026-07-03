@@ -78,42 +78,39 @@ def list_(
         console.print("[green]No new articles.[/green]")
         raise typer.Exit()
 
-    if not fresh:
-        from news_reader.ranker import Ranker
+    from news_reader.ranker import Ranker
 
-        liked = storage.get_interacted_articles(score=1)
-        disliked = storage.get_interacted_articles(score=-1)
+    liked = storage.get_interacted_articles(score=1)
+    disliked = storage.get_interacted_articles(score=-1)
 
-        liked_embs = [a["embedding"] for a in liked if a.get("embedding")]
-        disliked_embs = [a["embedding"] for a in disliked if a.get("embedding")]
+    liked_embs = [a["embedding"] for a in liked if a.get("embedding")]
+    disliked_embs = [a["embedding"] for a in disliked if a.get("embedding")]
 
-        ranker = Ranker(config)
-        ranker.score_articles(articles, liked_embs, disliked_embs)
+    ranker = Ranker(config)
+    ranker.score_articles(articles, liked_embs, disliked_embs)
+
+    if fresh:
+        articles.sort(key=lambda a: a.get("published_at") or "", reverse=True)
 
     table = Table(title="Articles")
     table.add_column("#", style="dim")
     table.add_column("Source")
     table.add_column("Title")
     table.add_column("Summary")
-    table.add_column("Keywords")
+    table.add_column("Score")
     table.add_column("Published")
-    if not fresh:
-        table.add_column("Score")
 
     for i, article in enumerate(articles[:limit], 1):
         summary = (article.get("summary") or "")[:60]
-        keywords = (article.get("keywords") or "")[:40]
         title_link = Text(article["title"][:80], style=f"link {article['link']}")
         row = [
             str(i),
             article.get("source_name", ""),
             title_link,
             summary,
-            keywords,
+            f"{article.get('_score', 0):.3f}",
             (article.get("published_at") or "")[:10],
         ]
-        if not fresh:
-            row.append(f"{article.get('_score', 0):.3f}")
         table.add_row(*row)
     console.print(table)
 

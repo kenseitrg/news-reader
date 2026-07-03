@@ -265,6 +265,7 @@ class Storage:
             rows = conn.execute(
                 """SELECT a.*, s.name as source_name
                    FROM articles a
+                   JOIN sources s ON a.source_id = s.id
                    JOIN interactions i ON a.id = i.article_id
                    WHERE i.score = ?
                    ORDER BY i.created_at DESC""",
