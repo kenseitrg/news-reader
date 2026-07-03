@@ -51,9 +51,10 @@ news-reader list
 # List unread articles sorted by publish date
 news-reader list --fresh
 
-# Mark articles as liked / disliked (trains the ranker)
-news-reader like 5
-news-reader dislike 3
+# Mark articles as liked / disliked / read
+news-reader like 5       # trains the ranker (positive signal)
+news-reader dislike 3    # trains the ranker (negative signal)
+news-reader read 8       # dismiss without affecting ranking
 
 # Re-summarise articles
 news-reader summarize --force
@@ -64,10 +65,17 @@ news-reader embed
 
 ## How ranking works
 
-1. Each article is embedded into a 384-dimensional vector using `intfloat/multilingual-e5-small`.
-2. When you **like** an article, unread articles with similar embeddings are pushed up.
-3. When you **dislike** an article, unread articles with similar embeddings are pushed down.
-4. The final score blends embedding affinity with freshness (30-day decay).
+Each article is embedded into a 384-dimensional vector using `intfloat/multilingual-e5-small`.
+
+When you mark an article, it gets a score:
+
+| Score | Meaning | Command |
+|-------|---------|---------|
+| `1` | Liked — similar articles are pushed up | `news-reader like <id>` |
+| `-1` | Disliked — similar articles are pushed down | `news-reader dislike <id>` |
+| `0` | Read — no effect on ranking | `news-reader read <id>` |
+
+Unread articles are scored by their embedding similarity to liked articles (minus similarity to disliked ones), blended with freshness (30-day decay). Articles marked as read (`0`) are excluded from the list but don't influence the ranker.
 
 This approach works for any language — including Russian — without relying on brittle keyword extraction.
 

@@ -70,7 +70,7 @@ class Storage:
 
                     CREATE TABLE interactions (
                         article_id INTEGER PRIMARY KEY REFERENCES articles(id),
-                        liked INTEGER CHECK(liked IN (0, 1)),
+                        score INTEGER CHECK(score IN (-1, 0, 1)),
                         clicked_at TEXT,
                         created_at TEXT DEFAULT (datetime('now'))
                     );
@@ -105,6 +105,25 @@ class Storage:
             cols = [col[1] for col in conn.execute("PRAGMA table_info(articles)")]
             if "embedding" not in cols:
                 conn.execute("ALTER TABLE articles ADD COLUMN embedding BLOB")
+
+            # Migration: liked → score for pre-existing databases
+            icols = {col[1] for col in conn.execute("PRAGMA table_info(interactions)")}
+            if "liked" in icols:
+                conn.executescript("""
+                    ALTER TABLE interactions RENAME TO interactions_old;
+                    CREATE TABLE interactions (
+                        article_id INTEGER PRIMARY KEY REFERENCES articles(id),
+                        score INTEGER CHECK(score IN (-1, 0, 1)),
+                        clicked_at TEXT,
+                        created_at TEXT DEFAULT (datetime('now'))
+                    );
+                    INSERT INTO interactions (article_id, score, clicked_at, created_at)
+                        SELECT article_id,
+                               CASE WHEN liked = 0 THEN -1 ELSE liked END,
+                               clicked_at, created_at
+                        FROM interactions_old;
+                    DROP TABLE interactions_old;
+                """)
 
     # --- sources ---
 
@@ -211,13 +230,13 @@ class Storage:
                 (summary, keywords, article_id),
             )
 
-    def set_interaction(self, article_id: int, liked: bool | None) -> None:
+    def set_interaction(self, article_id: int, score: int) -> None:
         with self._conn() as conn:
             conn.execute(
-                """INSERT INTO interactions (article_id, liked, clicked_at)
+                """INSERT INTO interactions (article_id, score, clicked_at)
                    VALUES (?, ?, datetime('now'))
-                   ON CONFLICT(article_id) DO UPDATE SET liked = ?, clicked_at = datetime('now')""",
-                (article_id, liked, liked),
+                   ON CONFLICT(article_id) DO UPDATE SET score = ?, clicked_at = datetime('now')""",
+                (article_id, score, score),
             )
 
     # --- embeddings ---
@@ -241,15 +260,15 @@ class Storage:
             ).fetchall()
             return [dict(r) for r in rows]
 
-    def get_interacted_articles(self, liked: bool) -> list[dict[str, Any]]:
+    def get_interacted_articles(self, score: int) -> list[dict[str, Any]]:
         with self._conn() as conn:
             rows = conn.execute(
                 """SELECT a.*, s.name as source_name
                    FROM articles a
                    JOIN interactions i ON a.id = i.article_id
-                   WHERE i.liked = ?
+                   WHERE i.score = ?
                    ORDER BY i.created_at DESC""",
-                (1 if liked else 0,),
+                (score,),
             ).fetchall()
             articles = [dict(r) for r in rows]
             for a in articles:

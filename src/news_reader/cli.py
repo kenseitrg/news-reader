@@ -81,8 +81,8 @@ def list_(
     if not fresh:
         from news_reader.ranker import Ranker
 
-        liked = storage.get_interacted_articles(liked=True)
-        disliked = storage.get_interacted_articles(liked=False)
+        liked = storage.get_interacted_articles(score=1)
+        disliked = storage.get_interacted_articles(score=-1)
 
         liked_embs = [a["embedding"] for a in liked if a.get("embedding")]
         disliked_embs = [a["embedding"] for a in disliked if a.get("embedding")]
@@ -123,7 +123,7 @@ def like(article_id: Annotated[int, typer.Argument(help="Article ID")]) -> None:
     """Mark article as liked."""
     config = load_config()
     storage = Storage(config["db_path"])
-    storage.set_interaction(article_id, liked=True)
+    storage.set_interaction(article_id, 1)
     console.print(f"[green]Liked article {article_id}[/green]")
 
 
@@ -132,8 +132,17 @@ def dislike(article_id: Annotated[int, typer.Argument(help="Article ID")]) -> No
     """Mark article as disliked."""
     config = load_config()
     storage = Storage(config["db_path"])
-    storage.set_interaction(article_id, liked=False)
+    storage.set_interaction(article_id, -1)
     console.print(f"[yellow]Disliked article {article_id}[/yellow]")
+
+
+@app.command()
+def read(article_id: Annotated[int, typer.Argument(help="Article ID")]) -> None:
+    """Mark article as read (no opinion)."""
+    config = load_config()
+    storage = Storage(config["db_path"])
+    storage.set_interaction(article_id, 0)
+    console.print(f"[blue]Marked article {article_id} as read[/blue]")
 
 
 @app.command()
