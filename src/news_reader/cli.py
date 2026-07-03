@@ -93,18 +93,18 @@ def list_(
         articles.sort(key=lambda a: a.get("published_at") or "", reverse=True)
 
     table = Table(title="Articles")
-    table.add_column("#", style="dim")
+    table.add_column("ID", style="dim")
     table.add_column("Source")
     table.add_column("Title")
     table.add_column("Summary")
     table.add_column("Score")
     table.add_column("Published")
 
-    for i, article in enumerate(articles[:limit], 1):
+    for article in articles[:limit]:
         summary = (article.get("summary") or "")[:60]
         title_link = Text(article["title"][:80], style=f"link {article['link']}")
         row = [
-            str(i),
+            str(article["id"]),
             article.get("source_name", ""),
             title_link,
             summary,
