@@ -8,7 +8,9 @@ from rich.console import Console
 from rich.table import Table
 
 from news_reader.config import load as load_config
+from news_reader.embeddings import Embedder
 from news_reader.fetcher import fetch_article_content, fetch_rss, fetch_scrape
+from news_reader.ranker import Ranker
 from news_reader.sources import source_from_row
 from news_reader.storage import Storage
 from news_reader.summarizer import Summarizer
@@ -42,7 +44,9 @@ def fetch() -> None:
                     if storage.add_article(article):
                         new_count += 1
 
-                console.print(f"  {source.name}: {len(articles)} found, {new_count} new")
+                console.print(
+                    f"  {source.name}: {len(articles)} found, {new_count} new"
+                )
                 total += new_count
         return total
 
@@ -58,9 +62,14 @@ def fetch() -> None:
 
 @app.command(name="list")
 def list_(
-    limit: Annotated[int, typer.Option("--limit", "-l", help="Max articles to show")] = 20,
+    limit: Annotated[
+        int, typer.Option("--limit", "-l", help="Max articles to show")
+    ] = 20,
+    fresh: Annotated[
+        bool, typer.Option("--fresh", "-f", help="Sort by date instead of relevance")
+    ] = False,
 ) -> None:
-    """Show unread articles."""
+    """Show unread articles, ranked by relevance."""
     config = load_config()
     storage = Storage(config["db_path"])
 
@@ -69,6 +78,19 @@ def list_(
         console.print("[green]No new articles.[/green]")
         raise typer.Exit()
 
+    if not fresh:
+        liked = storage.get_interacted_articles(liked=True)
+        disliked = storage.get_interacted_articles(liked=False)
+
+        liked_embs = [a["embedding"] for a in liked if a.get("embedding")]
+        disliked_embs = [a["embedding"] for a in disliked if a.get("embedding")]
+
+        ranker = Ranker(config)
+        ranker.score_articles(articles, liked_embs, disliked_embs)
+    else:
+        # already sorted by published_at DESC from the DB query
+        pass
+
     table = Table(title="Articles")
     table.add_column("#", style="dim")
     table.add_column("Source")
@@ -76,18 +98,23 @@ def list_(
     table.add_column("Summary")
     table.add_column("Keywords")
     table.add_column("Published")
+    if not fresh:
+        table.add_column("Score")
 
     for i, article in enumerate(articles[:limit], 1):
         summary = (article.get("summary") or "")[:60]
         keywords = (article.get("keywords") or "")[:40]
-        table.add_row(
+        row = [
             str(i),
             article.get("source_name", ""),
             article["title"][:80],
             summary,
             keywords,
             (article.get("published_at") or "")[:10],
-        )
+        ]
+        if not fresh:
+            row.append(f"{article.get('_score', 0):.3f}")
+        table.add_row(*row)
     console.print(table)
 
 
@@ -138,8 +165,13 @@ def sources() -> None:
 def source_add(
     name: Annotated[str, typer.Option("--name", "-n", help="Source name")],
     url: Annotated[str, typer.Option("--url", "-u", help="Source URL")],
-    type_: Annotated[str, typer.Option("--type", "-t", help="Source type (rss|scrape)")] = "rss",
-    feed_url: Annotated[Optional[str], typer.Option("--feed-url", "-f", help="RSS feed URL if different")] = None,
+    type_: Annotated[
+        str, typer.Option("--type", "-t", help="Source type (rss|scrape)")
+    ] = "rss",
+    feed_url: Annotated[
+        Optional[str],
+        typer.Option("--feed-url", "-f", help="RSS feed URL if different"),
+    ] = None,
 ) -> None:
     """Add a new source."""
     config = load_config()
@@ -181,6 +213,8 @@ def _summarize_new(storage: Storage, config: dict, force: bool = False) -> int:
         console.print(f"[red]Failed to load model: {exc}[/red]")
         return 0
 
+    embedder = Embedder()
+
     async def _fetch_and_summarize() -> int:
         done = 0
         async with httpx.AsyncClient() as client:
@@ -191,10 +225,16 @@ def _summarize_new(storage: Storage, config: dict, force: bool = False) -> int:
                     continue
 
                 console.print("  Summarizing...")
-                summary, keywords = summarizer.summarize(content)
+                summary = summarizer.summarize(content)
                 if summary:
-                    kw_str = ",".join(keywords) if keywords else None
-                    storage.update_article_summary(article["id"], summary, kw_str)
+                    storage.update_article_summary(article["id"], summary, None)
+
+                    console.print("  Computing embedding...")
+                    emb = embedder.embed_article(
+                        title=article["title"],
+                        summary=summary,
+                    )
+                    storage.update_article_embedding(article["id"], emb)
                     done += 1
         return done
 
@@ -203,13 +243,39 @@ def _summarize_new(storage: Storage, config: dict, force: bool = False) -> int:
 
 @app.command()
 def summarize(
-    force: Annotated[bool, typer.Option("--force", "-f", help="Re-summarize all articles")] = False,
+    force: Annotated[
+        bool, typer.Option("--force", "-f", help="Re-summarize all articles")
+    ] = False,
 ) -> None:
     """Summarize articles without a meaningful summary."""
     config = load_config()
     storage = Storage(config["db_path"])
     count = _summarize_new(storage, config, force=force)
     console.print(f"[green]Summarized {count} articles.[/green]")
+
+
+@app.command()
+def embed() -> None:
+    """Compute embeddings for articles that don't have one yet."""
+    config = load_config()
+    storage = Storage(config["db_path"])
+    missing = storage.get_articles_without_embeddings()
+
+    if not missing:
+        console.print("[green]All articles already have embeddings.[/green]")
+        raise typer.Exit()
+
+    embedder = Embedder()
+    for article in missing:
+        text = article["title"]
+        summary = article.get("summary")
+        if summary:
+            text = f"{text}\n\n{summary}"
+        console.print(f"  Embedding: {article['title'][:60]}...")
+        emb = embedder.embed(text)
+        storage.update_article_embedding(article["id"], emb)
+
+    console.print(f"[green]Embedded {len(missing)} articles.[/green]")
 
 
 if __name__ == "__main__":

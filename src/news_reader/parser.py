@@ -19,16 +19,18 @@ def parse_rss(xml_content: str, source_id: int) -> list[dict]:
         if hasattr(entry, "tags"):
             tags = [t.get("term", "") for t in entry.tags if t.get("term")]
 
-        articles.append({
-            "source_id": source_id,
-            "title": entry.get("title", ""),
-            "author": entry.get("author"),
-            "summary": entry.get("summary"),
-            "link": link,
-            "content_hash": content_hash,
-            "keywords": ",".join(tags) if tags else None,
-            "published_at": entry.get("published"),
-        })
+        articles.append(
+            {
+                "source_id": source_id,
+                "title": entry.get("title", ""),
+                "author": entry.get("author"),
+                "summary": entry.get("summary"),
+                "link": link,
+                "content_hash": content_hash,
+                "keywords": ",".join(tags) if tags else None,
+                "published_at": entry.get("published"),
+            }
+        )
     return articles
 
 

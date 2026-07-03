@@ -1,39 +1,41 @@
-"""
-Article scoring and personalization based on user interactions.
-"""
+"""Article scoring based on embedding similarity and freshness."""
 
 from datetime import datetime, timezone
 from typing import Any
 
+from news_reader.embeddings import Embedder
+
 
 class Ranker:
+    """Score and rank unread articles by similarity to liked/disliked articles."""
+
     def __init__(self, config: dict[str, Any]) -> None:
         weights = config.get("ranking", {})
-        self.freshness_weight = weights.get("freshness_weight", 0.4)
-        self.source_weight = weights.get("source_weight", 0.3)
-        self.keyword_weight = weights.get("keyword_weight", 0.2)
-        self.author_weight = weights.get("author_weight", 0.1)
+        self.freshness_weight = weights.get("freshness_weight", 0.3)
+        self.embedding_weight = weights.get("embedding_weight", 0.7)
         self.auto_filter_threshold = weights.get("auto_filter_threshold", 0.0)
 
-    def score_article(
+    def score_articles(
         self,
-        article: dict[str, Any],
-        source_score: float,
-        keyword_scores: dict[str, float],
-        author_score: float,
-    ) -> float:
-        freshness = self._freshness_score(article.get("published_at"))
-        source = self._normalize(source_score)
-        keyword = self._keyword_affinity(article.get("keywords", ""), keyword_scores)
-        author = self._normalize(author_score)
+        articles: list[dict[str, Any]],
+        liked_embeddings: list[list[float]],
+        disliked_embeddings: list[list[float]],
+    ) -> list[dict[str, Any]]:
+        """Score and sort *articles* in place, returning the same list."""
+        for article in articles:
+            freshness = self._freshness_score(article.get("published_at"))
+            emb_sim = self._embedding_affinity(
+                article.get("embedding"),
+                liked_embeddings,
+                disliked_embeddings,
+            )
+            article["_score"] = round(
+                self.freshness_weight * freshness + self.embedding_weight * emb_sim,
+                4,
+            )
 
-        total = (
-            self.freshness_weight * freshness
-            + self.source_weight * source
-            + self.keyword_weight * keyword
-            + self.author_weight * author
-        )
-        return round(total, 4)
+        articles.sort(key=lambda a: a["_score"], reverse=True)
+        return articles
 
     def _freshness_score(self, published_at: str | None) -> float:
         if not published_at:
@@ -46,16 +48,29 @@ class Ranker:
         except (ValueError, TypeError):
             return 0.5
 
-    def _normalize(self, score: float) -> float:
-        # normalize a score from [-1, 1] range to [0, 1]
-        return (score + 1) / 2
+    def _embedding_affinity(
+        self,
+        article_embedding: list[float] | None,
+        liked_embeddings: list[list[float]],
+        disliked_embeddings: list[list[float]],
+    ) -> float:
+        if not article_embedding:
+            return 0.3
 
-    def _keyword_affinity(self, keywords_str: str, keyword_scores: dict[str, float]) -> float:
-        if not keywords_str:
-            return 0.5
-        words = [w.strip().lower() for w in keywords_str.replace(",", " ").split() if w.strip()]
-        if not words:
-            return 0.5
-        scores = [keyword_scores.get(w, 0.0) for w in words]
-        avg = sum(scores) / len(scores)
-        return self._normalize(avg)
+        max_liked = 0.0
+        for le in liked_embeddings:
+            sim = Embedder.cosine_similarity(article_embedding, le)
+            if sim > max_liked:
+                max_liked = sim
+
+        max_disliked = 0.0
+        for de in disliked_embeddings:
+            sim = Embedder.cosine_similarity(article_embedding, de)
+            if sim > max_disliked:
+                max_disliked = sim
+
+        # liked weight: max_liked (higher is better)
+        # disliked penalty: max_disliked (higher is worse)
+        raw = max_liked - max_disliked
+        # Normalize from [-1, 1] to [0, 1]
+        return (raw + 1.0) / 2.0

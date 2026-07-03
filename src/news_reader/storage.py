@@ -1,8 +1,17 @@
 import sqlite3
+import struct
 from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
+
+
+def _serialize_embedding(embedding: list[float]) -> bytes:
+    return struct.pack(f"{len(embedding)}f", *embedding)
+
+
+def _deserialize_embedding(data: bytes) -> list[float]:
+    return list(struct.unpack(f"{len(data) // 4}f", data))
 
 
 class Storage:
@@ -84,14 +93,23 @@ class Storage:
                 );
             """)
 
+            # Migration: add embedding column for existing databases
+            try:
+                conn.execute("ALTER TABLE articles ADD COLUMN embedding BLOB")
+            except sqlite3.OperationalError:
+                pass  # column already exists
+
     # --- sources ---
 
-    def add_source(self, name: str, type_: str, url: str, feed_url: str | None = None) -> int:
+    def add_source(
+        self, name: str, type_: str, url: str, feed_url: str | None = None
+    ) -> int:
         with self._conn() as conn:
             cur = conn.execute(
                 "INSERT INTO sources (name, type, url, feed_url) VALUES (?, ?, ?, ?)",
                 (name, type_, url, feed_url),
             )
+            assert cur.lastrowid is not None
             return cur.lastrowid
 
     def get_sources(self, enabled_only: bool = True) -> list[dict[str, Any]]:
@@ -146,11 +164,18 @@ class Storage:
                    WHERE i.article_id IS NULL
                    ORDER BY a.published_at DESC"""
             ).fetchall()
-            return [dict(r) for r in rows]
+            articles = [dict(r) for r in rows]
+            for a in articles:
+                blob = a.get("embedding")
+                if blob and isinstance(blob, bytes):
+                    a["embedding"] = _deserialize_embedding(blob)
+            return articles
 
     # --- interactions ---
 
-    def get_articles_without_summaries(self, force: bool = False) -> list[dict[str, Any]]:
+    def get_articles_without_summaries(
+        self, force: bool = False
+    ) -> list[dict[str, Any]]:
         with self._conn() as conn:
             if force:
                 rows = conn.execute(
@@ -170,7 +195,9 @@ class Storage:
                 ).fetchall()
             return [dict(r) for r in rows]
 
-    def update_article_summary(self, article_id: int, summary: str, keywords: str | None) -> None:
+    def update_article_summary(
+        self, article_id: int, summary: str, keywords: str | None
+    ) -> None:
         with self._conn() as conn:
             conn.execute(
                 "UPDATE articles SET summary = ?, keywords = ? WHERE id = ?",
@@ -185,3 +212,41 @@ class Storage:
                    ON CONFLICT(article_id) DO UPDATE SET liked = ?, clicked_at = datetime('now')""",
                 (article_id, liked, liked),
             )
+
+    # --- embeddings ---
+
+    def update_article_embedding(self, article_id: int, embedding: list[float]) -> None:
+        blob = _serialize_embedding(embedding)
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE articles SET embedding = ? WHERE id = ?",
+                (blob, article_id),
+            )
+
+    def get_articles_without_embeddings(self) -> list[dict[str, Any]]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                """SELECT a.*, s.name as source_name
+                   FROM articles a
+                   JOIN sources s ON a.source_id = s.id
+                   WHERE a.embedding IS NULL
+                   ORDER BY a.published_at DESC"""
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def get_interacted_articles(self, liked: bool) -> list[dict[str, Any]]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                """SELECT a.*, s.name as source_name
+                   FROM articles a
+                   JOIN interactions i ON a.id = i.article_id
+                   WHERE i.liked = ?
+                   ORDER BY i.created_at DESC""",
+                (1 if liked else 0,),
+            ).fetchall()
+            articles = [dict(r) for r in rows]
+            for a in articles:
+                blob = a.get("embedding")
+                if blob and isinstance(blob, bytes):
+                    a["embedding"] = _deserialize_embedding(blob)
+            return articles

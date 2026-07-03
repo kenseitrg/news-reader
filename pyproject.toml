@@ -13,6 +13,7 @@ dependencies = [
     "torch>=2.0",
     "protobuf>=3.20",
     "sentencepiece>=0.1",
+    "sentence-transformers>=2.2",
     "typer>=0.9",
     "rich>=13.0",
     "pyyaml>=6.0",
