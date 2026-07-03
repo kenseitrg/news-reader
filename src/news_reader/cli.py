@@ -3,6 +3,7 @@ from typing import Annotated, Optional
 import typer
 from rich.console import Console
 from rich.table import Table
+from rich.text import Text
 
 from news_reader.config import load as load_config
 from news_reader.sources import source_from_row
@@ -102,7 +103,7 @@ def list_(
     for i, article in enumerate(articles[:limit], 1):
         summary = (article.get("summary") or "")[:60]
         keywords = (article.get("keywords") or "")[:40]
-        title_link = f"[link={article['link']}]{article['title'][:80]}[/link]"
+        title_link = Text(article["title"][:80], style=f"link {article['link']}")
         row = [
             str(i),
             article.get("source_name", ""),
