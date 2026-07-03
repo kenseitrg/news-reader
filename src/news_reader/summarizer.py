@@ -3,9 +3,6 @@
 import logging
 from typing import Any
 
-import torch
-from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
-
 logger = logging.getLogger(__name__)
 
 SUM_MODEL = "utrobinmv/t5_summary_en_ru_zh_base_2048"
@@ -22,6 +19,9 @@ class Summarizer:
         max_tokens: int = 80,
         temperature: float = 0.3,
     ) -> None:
+        import torch
+        from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+
         name = model_path or SUM_MODEL
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -68,6 +68,8 @@ class Summarizer:
         if self.temperature > 0:
             gen_kwargs["do_sample"] = True
             gen_kwargs["temperature"] = self.temperature
+
+        import torch
 
         with torch.no_grad():
             outputs = model.generate(**inputs, **gen_kwargs)

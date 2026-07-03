@@ -37,67 +37,74 @@ class Storage:
 
     def _init_db(self) -> None:
         with self._conn() as conn:
-            conn.executescript("""
-                CREATE TABLE IF NOT EXISTS sources (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    name TEXT NOT NULL,
-                    type TEXT NOT NULL CHECK(type IN ('rss', 'scrape')),
-                    url TEXT NOT NULL,
-                    feed_url TEXT,
-                    enabled INTEGER DEFAULT 1,
-                    created_at TEXT DEFAULT (datetime('now'))
-                );
+            # Check if schema already exists
+            has_articles = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='articles'"
+            ).fetchone()
 
-                CREATE TABLE IF NOT EXISTS articles (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    source_id INTEGER REFERENCES sources(id),
-                    title TEXT NOT NULL,
-                    author TEXT,
-                    summary TEXT,
-                    link TEXT NOT NULL UNIQUE,
-                    content_hash TEXT NOT NULL,
-                    keywords TEXT,
-                    published_at TEXT,
-                    fetched_at TEXT DEFAULT (datetime('now'))
-                );
+            if has_articles is None:
+                conn.executescript("""
+                    CREATE TABLE sources (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        name TEXT NOT NULL,
+                        type TEXT NOT NULL CHECK(type IN ('rss', 'scrape')),
+                        url TEXT NOT NULL,
+                        feed_url TEXT,
+                        enabled INTEGER DEFAULT 1,
+                        created_at TEXT DEFAULT (datetime('now'))
+                    );
 
-                CREATE TABLE IF NOT EXISTS interactions (
-                    article_id INTEGER PRIMARY KEY REFERENCES articles(id),
-                    liked INTEGER CHECK(liked IN (0, 1)),
-                    clicked_at TEXT,
-                    created_at TEXT DEFAULT (datetime('now'))
-                );
+                    CREATE TABLE articles (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        source_id INTEGER REFERENCES sources(id),
+                        title TEXT NOT NULL,
+                        author TEXT,
+                        summary TEXT,
+                        link TEXT NOT NULL UNIQUE,
+                        content_hash TEXT NOT NULL,
+                        keywords TEXT,
+                        embedding BLOB,
+                        published_at TEXT,
+                        fetched_at TEXT DEFAULT (datetime('now'))
+                    );
 
-                CREATE TABLE IF NOT EXISTS source_scores (
-                    source_id INTEGER PRIMARY KEY REFERENCES sources(id),
-                    score REAL DEFAULT 0.0,
-                    likes INTEGER DEFAULT 0,
-                    dislikes INTEGER DEFAULT 0
-                );
+                    CREATE TABLE interactions (
+                        article_id INTEGER PRIMARY KEY REFERENCES articles(id),
+                        liked INTEGER CHECK(liked IN (0, 1)),
+                        clicked_at TEXT,
+                        created_at TEXT DEFAULT (datetime('now'))
+                    );
 
-                CREATE TABLE IF NOT EXISTS author_scores (
-                    author TEXT NOT NULL,
-                    source_id INTEGER NOT NULL,
-                    score REAL DEFAULT 0.0,
-                    likes INTEGER DEFAULT 0,
-                    dislikes INTEGER DEFAULT 0,
-                    PRIMARY KEY (author, source_id)
-                );
+                    CREATE TABLE source_scores (
+                        source_id INTEGER PRIMARY KEY REFERENCES sources(id),
+                        score REAL DEFAULT 0.0,
+                        likes INTEGER DEFAULT 0,
+                        dislikes INTEGER DEFAULT 0
+                    );
 
-                CREATE TABLE IF NOT EXISTS keyword_scores (
-                    keyword TEXT NOT NULL,
-                    score REAL DEFAULT 0.0,
-                    likes INTEGER DEFAULT 0,
-                    dislikes INTEGER DEFAULT 0,
-                    PRIMARY KEY (keyword)
-                );
-            """)
+                    CREATE TABLE author_scores (
+                        author TEXT NOT NULL,
+                        source_id INTEGER NOT NULL,
+                        score REAL DEFAULT 0.0,
+                        likes INTEGER DEFAULT 0,
+                        dislikes INTEGER DEFAULT 0,
+                        PRIMARY KEY (author, source_id)
+                    );
 
-            # Migration: add embedding column for existing databases
-            try:
+                    CREATE TABLE keyword_scores (
+                        keyword TEXT NOT NULL,
+                        score REAL DEFAULT 0.0,
+                        likes INTEGER DEFAULT 0,
+                        dislikes INTEGER DEFAULT 0,
+                        PRIMARY KEY (keyword)
+                    );
+                """)
+                return
+
+            # Migration: add embedding column for pre-existing databases
+            cols = [col[1] for col in conn.execute("PRAGMA table_info(articles)")]
+            if "embedding" not in cols:
                 conn.execute("ALTER TABLE articles ADD COLUMN embedding BLOB")
-            except sqlite3.OperationalError:
-                pass  # column already exists
 
     # --- sources ---
 

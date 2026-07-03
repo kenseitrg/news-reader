@@ -3,8 +3,6 @@
 from datetime import datetime, timezone
 from typing import Any
 
-from news_reader.embeddings import Embedder
-
 
 class Ranker:
     """Score and rank unread articles by similarity to liked/disliked articles."""
@@ -22,12 +20,24 @@ class Ranker:
         disliked_embeddings: list[list[float]],
     ) -> list[dict[str, Any]]:
         """Score and sort *articles* in place, returning the same list."""
+        import numpy as np
+
+        has_liked = liked_embeddings and liked_embeddings[0]
+        has_disliked = disliked_embeddings and disliked_embeddings[0]
+
+        liked_arr = (
+            np.asarray(liked_embeddings, dtype=np.float32) if has_liked else None
+        )
+        disliked_arr = (
+            np.asarray(disliked_embeddings, dtype=np.float32) if has_disliked else None
+        )
+
         for article in articles:
             freshness = self._freshness_score(article.get("published_at"))
             emb_sim = self._embedding_affinity(
                 article.get("embedding"),
-                liked_embeddings,
-                disliked_embeddings,
+                liked_arr,
+                disliked_arr,
             )
             article["_score"] = round(
                 self.freshness_weight * freshness + self.embedding_weight * emb_sim,
@@ -51,26 +61,23 @@ class Ranker:
     def _embedding_affinity(
         self,
         article_embedding: list[float] | None,
-        liked_embeddings: list[list[float]],
-        disliked_embeddings: list[list[float]],
+        liked_arr: Any | None,
+        disliked_arr: Any | None,
     ) -> float:
-        if not article_embedding:
-            return 0.3
+        if article_embedding is None or (liked_arr is None and disliked_arr is None):
+            return 0.5
+
+        import numpy as np
+
+        vec = np.asarray(article_embedding, dtype=np.float32)
 
         max_liked = 0.0
-        for le in liked_embeddings:
-            sim = Embedder.cosine_similarity(article_embedding, le)
-            if sim > max_liked:
-                max_liked = sim
+        if liked_arr is not None and liked_arr.shape[0] > 0:
+            max_liked = float((liked_arr @ vec).max())
 
         max_disliked = 0.0
-        for de in disliked_embeddings:
-            sim = Embedder.cosine_similarity(article_embedding, de)
-            if sim > max_disliked:
-                max_disliked = sim
+        if disliked_arr is not None and disliked_arr.shape[0] > 0:
+            max_disliked = float((disliked_arr @ vec).max())
 
-        # liked weight: max_liked (higher is better)
-        # disliked penalty: max_disliked (higher is worse)
         raw = max_liked - max_disliked
-        # Normalize from [-1, 1] to [0, 1]
         return (raw + 1.0) / 2.0

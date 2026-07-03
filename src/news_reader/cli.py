@@ -1,19 +1,12 @@
 from typing import Annotated, Optional
 
-import asyncio
-
-import httpx
 import typer
 from rich.console import Console
 from rich.table import Table
 
 from news_reader.config import load as load_config
-from news_reader.embeddings import Embedder
-from news_reader.fetcher import fetch_article_content, fetch_rss, fetch_scrape
-from news_reader.ranker import Ranker
 from news_reader.sources import source_from_row
 from news_reader.storage import Storage
-from news_reader.summarizer import Summarizer
 
 console = Console()
 app = typer.Typer()
@@ -22,6 +15,12 @@ app = typer.Typer()
 @app.command()
 def fetch() -> None:
     """Fetch new articles from all enabled sources."""
+    import asyncio
+
+    import httpx
+
+    from news_reader.fetcher import fetch_rss, fetch_scrape
+
     config = load_config()
     storage = Storage(config["db_path"])
     sources = [source_from_row(s) for s in storage.get_sources(enabled_only=True)]
@@ -79,6 +78,8 @@ def list_(
         raise typer.Exit()
 
     if not fresh:
+        from news_reader.ranker import Ranker
+
         liked = storage.get_interacted_articles(liked=True)
         disliked = storage.get_interacted_articles(liked=False)
 
@@ -87,9 +88,6 @@ def list_(
 
         ranker = Ranker(config)
         ranker.score_articles(articles, liked_embs, disliked_embs)
-    else:
-        # already sorted by published_at DESC from the DB query
-        pass
 
     table = Table(title="Articles")
     table.add_column("#", style="dim")
@@ -104,10 +102,11 @@ def list_(
     for i, article in enumerate(articles[:limit], 1):
         summary = (article.get("summary") or "")[:60]
         keywords = (article.get("keywords") or "")[:40]
+        title_link = f"[link={article['link']}]{article['title'][:80]}[/link]"
         row = [
             str(i),
             article.get("source_name", ""),
-            article["title"][:80],
+            title_link,
             summary,
             keywords,
             (article.get("published_at") or "")[:10],
@@ -193,6 +192,14 @@ def source_remove(
 
 def _summarize_new(storage: Storage, config: dict, force: bool = False) -> int:
     """Summarize articles that don't have a meaningful summary yet."""
+    import asyncio
+
+    import httpx
+
+    from news_reader.embeddings import Embedder
+    from news_reader.fetcher import fetch_article_content
+    from news_reader.summarizer import Summarizer
+
     to_summarize = storage.get_articles_without_summaries(force=force)
     if not to_summarize:
         return 0
@@ -257,6 +264,8 @@ def summarize(
 @app.command()
 def embed() -> None:
     """Compute embeddings for articles that don't have one yet."""
+    from news_reader.embeddings import Embedder
+
     config = load_config()
     storage = Storage(config["db_path"])
     missing = storage.get_articles_without_embeddings()

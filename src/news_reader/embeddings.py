@@ -4,8 +4,6 @@ import logging
 import math
 from typing import Any
 
-import numpy as np
-
 logger = logging.getLogger(__name__)
 
 E5_MODEL = "intfloat/multilingual-e5-small"
@@ -34,7 +32,7 @@ class Embedder:
         """
         self._lazy_load()
         prefixed = f"passage: {text}"
-        vec: np.ndarray = self._model.encode(prefixed, normalize_embeddings=True)
+        vec = self._model.encode(prefixed, normalize_embeddings=True)
         return vec.tolist()
 
     def embed_article(self, title: str, summary: str) -> list[float]:
