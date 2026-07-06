@@ -236,7 +236,8 @@ def _summarize_new(storage: Storage, config: dict, force: bool = False) -> int:
                 console.print(f"  Fetching content: {article['title'][:60]}...")
                 content = await fetch_article_content(article["link"], client)
                 if not content:
-                    continue
+                    console.print("  (no content, falling back to title)")
+                    content = article["title"]
 
                 console.print("  Summarizing...")
                 summary = summarizer.summarize(content)
