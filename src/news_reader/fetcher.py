@@ -73,13 +73,13 @@ async def fetch_scrape(source: Source, client: httpx.AsyncClient) -> list[dict]:
 def _parse_hacker_news(body: str, source_id: int) -> list[dict]:
     """Parse HN Algolia API response JSON."""
     data = json.loads(body)
+    hits = sorted(data.get("hits", []), key=lambda h: h.get("points", 0), reverse=True)
     articles = []
-    for hit in data.get("hits", []):
+    for hit in hits:
         title = hit.get("title", "")
         url = (
             hit.get("url") or f"https://news.ycombinator.com/item?id={hit['objectID']}"
         )
-        points = hit.get("points", 0)
         author = hit.get("author", "")
         content_hash = hashlib.sha256(url.encode()).hexdigest()
         created = hit.get("created_at")
@@ -89,7 +89,7 @@ def _parse_hacker_news(body: str, source_id: int) -> list[dict]:
                 "source_id": source_id,
                 "title": title,
                 "author": author,
-                "summary": f"Score: {points} points | {hit.get('num_comments', 0)} comments",
+                "summary": None,
                 "link": url,
                 "content_hash": content_hash,
                 "keywords": None,
@@ -97,7 +97,6 @@ def _parse_hacker_news(body: str, source_id: int) -> list[dict]:
             }
         )
 
-    articles.sort(key=lambda a: int(a["summary"].split()[1]), reverse=True)
     return articles
 
 

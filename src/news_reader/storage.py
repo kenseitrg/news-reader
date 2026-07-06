@@ -125,6 +125,15 @@ class Storage:
                     DROP TABLE interactions_old;
                 """)
 
+            # Migration: clear HN placeholder summaries so LLM can regenerate them
+            hn_fixed = conn.execute(
+                "SELECT COUNT(*) FROM articles WHERE summary LIKE 'Score:%'"
+            ).fetchone()[0]
+            if hn_fixed:
+                conn.execute(
+                    "UPDATE articles SET summary = NULL WHERE summary LIKE 'Score:%'"
+                )
+
     # --- sources ---
 
     def add_source(
@@ -216,7 +225,6 @@ class Storage:
                        FROM articles a
                        JOIN sources s ON a.source_id = s.id
                        WHERE a.summary IS NULL OR a.summary = ''
-                          OR a.summary LIKE 'Score:%'
                        ORDER BY a.published_at DESC"""
                 ).fetchall()
             return [dict(r) for r in rows]
