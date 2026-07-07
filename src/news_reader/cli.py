@@ -197,6 +197,14 @@ def source_remove(
     console.print(f"[green]Removed source {source_id}[/green]")
 
 
+@app.command()
+def web() -> None:
+    """Launch the web UI."""
+    from news_reader.web import serve
+
+    serve()
+
+
 def _summarize_new(storage: Storage, config: dict, force: bool = False) -> int:
     """Summarize articles that don't have a meaningful summary yet."""
     import asyncio
