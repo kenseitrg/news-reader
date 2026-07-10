@@ -73,7 +73,7 @@ def list_(
     config = load_config()
     storage = Storage(config["db_path"])
 
-    articles = storage.get_uninteracted_articles()
+    articles = storage.get_new_articles()
     if not articles:
         console.print("[green]No new articles.[/green]")
         raise typer.Exit()
@@ -86,8 +86,17 @@ def list_(
     liked_embs = [a["embedding"] for a in liked if a.get("embedding")]
     disliked_embs = [a["embedding"] for a in disliked if a.get("embedding")]
 
+    source_scores = storage.get_source_scores()
+    author_scores = storage.get_author_scores()
+
     ranker = Ranker(config)
-    ranker.score_articles(articles, liked_embs, disliked_embs)
+    ranker.score_articles(
+        articles,
+        liked_embs,
+        disliked_embs,
+        source_scores=source_scores,
+        author_scores=author_scores,
+    )
 
     if fresh:
         articles.sort(key=lambda a: a.get("published_at") or "", reverse=True)
@@ -301,6 +310,89 @@ def embed() -> None:
         storage.update_article_embedding(article["id"], emb)
 
     console.print(f"[green]Embedded {len(missing)} articles.[/green]")
+
+
+@app.command()
+def stats() -> None:
+    """Show personalisation statistics."""
+    config = load_config()
+    storage = Storage(config["db_path"])
+    data = storage.get_stats()
+
+    i = data["interactions"]
+    total = i["total"]
+    likes = i["likes"]
+    dislikes = i["dislikes"]
+    neutrals = i["neutrals"]
+
+    console.print()
+    console.print("[bold]Overview[/bold]")
+    summary = Table(show_header=False, box=None)
+    summary.add_column("Metric")
+    summary.add_column("Value")
+    summary.add_row("Total articles", str(data["articles"]["total"]))
+    summary.add_row("New (unranked)", str(data["articles"]["new"]))
+    summary.add_row("Total interactions", str(total))
+    summary.add_row("  👍 Liked", str(likes))
+    summary.add_row("  👎 Disliked", str(dislikes))
+    summary.add_row("  🤷 Neutral", str(neutrals))
+    if total:
+        summary.add_row("  Like ratio", f"{100.0 * likes / total:.1f}%")
+    console.print(summary)
+
+    if data["top_sources"]:
+        console.print()
+        console.print("[bold]Top Sources[/bold]")
+        tsrc = Table()
+        tsrc.add_column("Source")
+        tsrc.add_column("Score")
+        tsrc.add_column("Likes")
+        tsrc.add_column("Dislikes")
+        for row in data["top_sources"]:
+            raw = row["score"]
+            tsrc.add_row(
+                row["name"],
+                f"{raw:+.4f}",
+                str(row["likes"]),
+                str(row["dislikes"]),
+            )
+        console.print(tsrc)
+
+    if data["bottom_sources"]:
+        console.print()
+        console.print("[bold]Worst Sources[/bold]")
+        bsrc = Table()
+        bsrc.add_column("Source")
+        bsrc.add_column("Score")
+        bsrc.add_column("Likes")
+        bsrc.add_column("Dislikes")
+        for row in data["bottom_sources"]:
+            bsrc.add_row(
+                row["name"],
+                f"{row['score']:+.4f}",
+                str(row["likes"]),
+                str(row["dislikes"]),
+            )
+        console.print(bsrc)
+
+    if data["top_authors"]:
+        console.print()
+        console.print("[bold]Top Authors[/bold]")
+        tauth = Table()
+        tauth.add_column("Author")
+        tauth.add_column("Source")
+        tauth.add_column("Score")
+        tauth.add_column("Likes")
+        tauth.add_column("Dislikes")
+        for row in data["top_authors"]:
+            tauth.add_row(
+                row["author"],
+                row["source_name"],
+                f"{row['score']:+.4f}",
+                str(row["likes"]),
+                str(row["dislikes"]),
+            )
+        console.print(tauth)
 
 
 if __name__ == "__main__":

@@ -14,8 +14,10 @@ embedding:
   model: intfloat/multilingual-e5-small
 
 ranking:
-  freshness_weight: 0.3
-  embedding_weight: 0.7
+  freshness_weight: 0.25
+  source_weight: 0.25
+  author_weight: 0.25
+  embedding_weight: 0.25
   auto_filter_threshold: 0.0
 
 sources: []

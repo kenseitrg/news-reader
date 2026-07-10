@@ -134,6 +134,69 @@ class Storage:
                     "UPDATE articles SET summary = NULL WHERE summary LIKE 'Score:%'"
                 )
 
+            # Migration: backfill source_scores and author_scores from existing interactions
+            has_source_scores = conn.execute(
+                "SELECT COUNT(*) FROM source_scores"
+            ).fetchone()[0]
+            if has_source_scores == 0:
+                conn.executescript("""
+                    INSERT INTO source_scores (source_id, likes, dislikes, score)
+                    SELECT
+                        a.source_id,
+                        COALESCE(SUM(CASE WHEN i.score = 1 THEN 1 ELSE 0 END), 0)           AS likes,
+                        COALESCE(SUM(CASE WHEN i.score = -1 THEN 1 ELSE 0 END), 0)          AS dislikes,
+                        ROUND(
+                            1.0 * (
+                                COALESCE(SUM(CASE WHEN i.score = 1 THEN 1 ELSE 0 END), 0)
+                                -
+                                COALESCE(SUM(CASE WHEN i.score = -1 THEN 1 ELSE 0 END), 0)
+                            )
+                            / NULLIF(
+                                COALESCE(SUM(CASE WHEN i.score = 1 THEN 1 ELSE 0 END), 0)
+                                +
+                                COALESCE(SUM(CASE WHEN i.score = -1 THEN 1 ELSE 0 END), 0),
+                                0
+                            ),
+                            4
+                        )                                                                   AS score
+                    FROM articles a
+                    JOIN interactions i ON a.id = i.article_id
+                    WHERE i.score IN (1, -1)
+                    GROUP BY a.source_id;
+                """)
+
+            has_author_scores = conn.execute(
+                "SELECT COUNT(*) FROM author_scores"
+            ).fetchone()[0]
+            if has_author_scores == 0:
+                conn.executescript("""
+                    INSERT INTO author_scores (author, source_id, likes, dislikes, score)
+                    SELECT
+                        a.author,
+                        a.source_id,
+                        COALESCE(SUM(CASE WHEN i.score = 1 THEN 1 ELSE 0 END), 0)           AS likes,
+                        COALESCE(SUM(CASE WHEN i.score = -1 THEN 1 ELSE 0 END), 0)          AS dislikes,
+                        ROUND(
+                            1.0 * (
+                                COALESCE(SUM(CASE WHEN i.score = 1 THEN 1 ELSE 0 END), 0)
+                                -
+                                COALESCE(SUM(CASE WHEN i.score = -1 THEN 1 ELSE 0 END), 0)
+                            )
+                            / NULLIF(
+                                COALESCE(SUM(CASE WHEN i.score = 1 THEN 1 ELSE 0 END), 0)
+                                +
+                                COALESCE(SUM(CASE WHEN i.score = -1 THEN 1 ELSE 0 END), 0),
+                                0
+                            ),
+                            4
+                        )                                                                   AS score
+                    FROM articles a
+                    JOIN interactions i ON a.id = i.article_id
+                    WHERE i.score IN (1, -1)
+                      AND a.author IS NOT NULL AND a.author != ''
+                    GROUP BY a.author, a.source_id;
+                """)
+
     # --- sources ---
 
     def add_source(
@@ -189,6 +252,10 @@ class Storage:
             )
             return cur.lastrowid
 
+    def get_new_articles(self) -> list[dict[str, Any]]:
+        """Articles that have no interaction row — the unseen/unranked pool."""
+        return self.get_uninteracted_articles()
+
     def get_uninteracted_articles(self) -> list[dict[str, Any]]:
         with self._conn() as conn:
             rows = conn.execute(
@@ -240,12 +307,139 @@ class Storage:
 
     def set_interaction(self, article_id: int, score: int) -> None:
         with self._conn() as conn:
+            # Look up article metadata needed for score tracking
+            article = conn.execute(
+                "SELECT source_id, author FROM articles WHERE id = ?",
+                (article_id,),
+            ).fetchone()
+            if article is None:
+                return
+
+            # Read old interaction score so we can reverse it
+            old = conn.execute(
+                "SELECT score FROM interactions WHERE article_id = ?",
+                (article_id,),
+            ).fetchone()
+            old_score: int | None = old["score"] if old else None
+
+            # Update interaction row (existing behaviour)
             conn.execute(
                 """INSERT INTO interactions (article_id, score, clicked_at)
                    VALUES (?, ?, datetime('now'))
-                   ON CONFLICT(article_id) DO UPDATE SET score = ?, clicked_at = datetime('now')""",
+                   ON CONFLICT(article_id) DO UPDATE SET
+                       score = ?, clicked_at = datetime('now')""",
                 (article_id, score, score),
             )
+
+            # Only polar scores (1 / -1) affect aggregate tracking
+            if score == 0:
+                self._reverse_score_contribution(conn, article, old_score)
+                return
+
+            self._reverse_score_contribution(conn, article, old_score)
+            self._apply_score_contribution(conn, article, score)
+
+    @staticmethod
+    def _reverse_score_contribution(
+        conn: sqlite3.Connection,
+        article: sqlite3.Row,
+        old_score: int | None,
+    ) -> None:
+        """Undo the old_score contribution before applying a new one."""
+        source_id = article["source_id"]
+        author: str | None = article["author"]
+
+        if old_score == 1:
+            conn.execute(
+                """UPDATE source_scores SET
+                       likes = MAX(likes - 1, 0),
+                       score = COALESCE(
+                           ROUND(1.0 * (likes - 1 - dislikes) / NULLIF(likes - 1 + dislikes, 0), 4),
+                           0.0
+                       )
+                   WHERE source_id = ?""",
+                (source_id,),
+            )
+            if author:
+                conn.execute(
+                    """UPDATE author_scores SET
+                           likes = MAX(likes - 1, 0),
+                           score = COALESCE(
+                               ROUND(1.0 * (likes - 1 - dislikes) / NULLIF(likes - 1 + dislikes, 0), 4),
+                               0.0
+                           )
+                       WHERE author = ? AND source_id = ?""",
+                    (author, source_id),
+                )
+        elif old_score == -1:
+            conn.execute(
+                """UPDATE source_scores SET
+                       dislikes = MAX(dislikes - 1, 0),
+                       score = COALESCE(
+                           ROUND(1.0 * (likes - dislikes + 1) / NULLIF(likes + dislikes - 1, 0), 4),
+                           0.0
+                       )
+                   WHERE source_id = ?""",
+                (source_id,),
+            )
+            if author:
+                conn.execute(
+                    """UPDATE author_scores SET
+                           dislikes = MAX(dislikes - 1, 0),
+                           score = COALESCE(
+                               ROUND(1.0 * (likes - dislikes + 1) / NULLIF(likes + dislikes - 1, 0), 4),
+                               0.0
+                           )
+                       WHERE author = ? AND source_id = ?""",
+                    (author, source_id),
+                )
+
+    @staticmethod
+    def _apply_score_contribution(
+        conn: sqlite3.Connection,
+        article: sqlite3.Row,
+        score: int,
+    ) -> None:
+        """Record a new polar interaction (score is 1 or -1)."""
+        source_id = article["source_id"]
+        author: str | None = article["author"]
+
+        if score == 1:
+            conn.execute(
+                """INSERT INTO source_scores (source_id, likes, dislikes, score)
+                       VALUES (?, 1, 0, 1.0)
+                       ON CONFLICT(source_id) DO UPDATE SET
+                           likes = likes + 1,
+                           score = ROUND(1.0 * (likes + 1 - dislikes) / NULLIF(likes + 1 + dislikes, 0), 4)""",
+                (source_id,),
+            )
+            if author:
+                conn.execute(
+                    """INSERT INTO author_scores (author, source_id, likes, dislikes, score)
+                           VALUES (?, ?, 1, 0, 1.0)
+                           ON CONFLICT(author, source_id) DO UPDATE SET
+                               likes = likes + 1,
+                               score = ROUND(1.0 * (likes + 1 - dislikes) / NULLIF(likes + 1 + dislikes, 0), 4)""",
+                    (author, source_id),
+                )
+        elif score == -1:
+            conn.execute(
+                """INSERT INTO source_scores (source_id, likes, dislikes, score)
+                       VALUES (?, 0, 1, -1.0)
+                       ON CONFLICT(source_id) DO UPDATE SET
+                           dislikes = dislikes + 1,
+                           score = ROUND(1.0 * (likes - dislikes - 1) / NULLIF(likes + dislikes + 1, 0), 4)""",
+                (source_id,),
+            )
+            if author:
+                conn.execute(
+                    """INSERT INTO author_scores (author, source_id, likes, dislikes, score)
+                           VALUES (?, ?, 0, 1, -1.0)
+                           ON CONFLICT(author, source_id) DO UPDATE SET
+                               dislikes = dislikes + 1,
+                               score = ROUND(1.0 * (likes - dislikes - 1) / NULLIF(likes + dislikes + 1, 0), 4)""",
+                    (author, source_id),
+                )
 
     # --- embeddings ---
 
@@ -268,6 +462,24 @@ class Storage:
             ).fetchall()
             return [dict(r) for r in rows]
 
+    # --- score tracking tables ---
+
+    def get_source_scores(self) -> dict[int, dict[str, Any]]:
+        """Return source_id -> {score, likes, dislikes} for sources with data."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT source_id, score, likes, dislikes FROM source_scores"
+            ).fetchall()
+            return {r["source_id"]: dict(r) for r in rows}
+
+    def get_author_scores(self) -> dict[tuple[str, int], dict[str, Any]]:
+        """Return (author, source_id) -> {score, likes, dislikes}."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT author, source_id, score, likes, dislikes FROM author_scores"
+            ).fetchall()
+            return {(r["author"], r["source_id"]): dict(r) for r in rows}
+
     def get_interacted_articles(self, score: int) -> list[dict[str, Any]]:
         with self._conn() as conn:
             rows = conn.execute(
@@ -285,3 +497,70 @@ class Storage:
                 if blob and isinstance(blob, bytes):
                     a["embedding"] = _deserialize_embedding(blob)
             return articles
+
+    # --- stats ---
+
+    def get_stats(self) -> dict[str, Any]:
+        """Return summary statistics about interactions and personalisation data."""
+        with self._conn() as conn:
+            total_articles = conn.execute("SELECT COUNT(*) FROM articles").fetchone()[0]
+            new_articles = conn.execute(
+                """SELECT COUNT(*) FROM articles a
+                   LEFT JOIN interactions i ON a.id = i.article_id
+                   WHERE i.article_id IS NULL"""
+            ).fetchone()[0]
+            likes = conn.execute(
+                "SELECT COUNT(*) FROM interactions WHERE score = 1"
+            ).fetchone()[0]
+            dislikes = conn.execute(
+                "SELECT COUNT(*) FROM interactions WHERE score = -1"
+            ).fetchone()[0]
+            neutrals = conn.execute(
+                "SELECT COUNT(*) FROM interactions WHERE score = 0"
+            ).fetchone()[0]
+
+            top_sources = [
+                dict(r)
+                for r in conn.execute(
+                    """SELECT s.name, ss.score, ss.likes, ss.dislikes
+                       FROM source_scores ss
+                       JOIN sources s ON ss.source_id = s.id
+                       ORDER BY ss.score DESC
+                       LIMIT 10"""
+                ).fetchall()
+            ]
+
+            top_authors = [
+                dict(r)
+                for r in conn.execute(
+                    """SELECT as2.author, as2.score, as2.likes, as2.dislikes, s.name as source_name
+                       FROM author_scores as2
+                       JOIN sources s ON as2.source_id = s.id
+                       ORDER BY as2.score DESC
+                       LIMIT 10"""
+                ).fetchall()
+            ]
+
+            bottom_sources = [
+                dict(r)
+                for r in conn.execute(
+                    """SELECT s.name, ss.score, ss.likes, ss.dislikes
+                       FROM source_scores ss
+                       JOIN sources s ON ss.source_id = s.id
+                       ORDER BY ss.score ASC
+                       LIMIT 5"""
+                ).fetchall()
+            ]
+
+            return {
+                "articles": {"total": total_articles, "new": new_articles},
+                "interactions": {
+                    "total": likes + dislikes + neutrals,
+                    "likes": likes,
+                    "dislikes": dislikes,
+                    "neutrals": neutrals,
+                },
+                "top_sources": top_sources,
+                "bottom_sources": bottom_sources,
+                "top_authors": top_authors,
+            }

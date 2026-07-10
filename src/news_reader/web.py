@@ -98,7 +98,7 @@ async function loadArticles() {
 function renderTable(articles) {
   countSpan.textContent = articles.length + ' articles';
   if (articles.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="5" class="empty">No unread articles</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="5" class="empty">No new articles</td></tr>';
     return;
   }
   tbody.innerHTML = articles.map(a => {
@@ -135,7 +135,7 @@ async function interact(id, score, btn) {
     const remaining = tbody.querySelectorAll('tr').length;
     countSpan.textContent = remaining + ' articles';
     if (remaining === 0) {
-      tbody.innerHTML = '<tr><td colspan="5" class="empty">No unread articles</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="5" class="empty">No new articles</td></tr>';
     }
   } catch (e) {
     buttons.forEach(b => b.disabled = false);
@@ -226,7 +226,7 @@ class NewsReaderHandler(BaseHTTPRequestHandler):
         assert self.storage is not None
         assert self.config is not None
 
-        articles = self.storage.get_uninteracted_articles()
+        articles = self.storage.get_new_articles()
 
         liked = self.storage.get_interacted_articles(score=1)
         disliked = self.storage.get_interacted_articles(score=-1)
@@ -234,8 +234,17 @@ class NewsReaderHandler(BaseHTTPRequestHandler):
         liked_embs = [a["embedding"] for a in liked if a.get("embedding")]
         disliked_embs = [a["embedding"] for a in disliked if a.get("embedding")]
 
+        source_scores = self.storage.get_source_scores()
+        author_scores = self.storage.get_author_scores()
+
         ranker = Ranker(self.config)
-        ranker.score_articles(articles, liked_embs, disliked_embs)
+        ranker.score_articles(
+            articles,
+            liked_embs,
+            disliked_embs,
+            source_scores=source_scores,
+            author_scores=author_scores,
+        )
 
         result = []
         for a in articles[:limit]:
