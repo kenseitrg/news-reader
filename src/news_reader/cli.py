@@ -207,6 +207,28 @@ def source_remove(
 
 
 @app.command()
+def source_enable(
+    source_id: Annotated[int, typer.Argument(help="Source ID")],
+) -> None:
+    """Enable a source so it will be fetched."""
+    config = load_config()
+    storage = Storage(config["db_path"])
+    storage.set_source_enabled(source_id, True)
+    console.print(f"[green]Enabled source {source_id}[/green]")
+
+
+@app.command()
+def source_disable(
+    source_id: Annotated[int, typer.Argument(help="Source ID")],
+) -> None:
+    """Disable a source so it won't be fetched."""
+    config = load_config()
+    storage = Storage(config["db_path"])
+    storage.set_source_enabled(source_id, False)
+    console.print(f"[green]Disabled source {source_id}[/green]")
+
+
+@app.command()
 def web() -> None:
     """Launch the web UI."""
     from news_reader.web import serve

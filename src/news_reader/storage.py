@@ -218,6 +218,13 @@ class Storage:
             rows = conn.execute(query).fetchall()
             return [dict(r) for r in rows]
 
+    def set_source_enabled(self, source_id: int, enabled: bool) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE sources SET enabled = ? WHERE id = ?",
+                (int(enabled), source_id),
+            )
+
     def remove_source(self, source_id: int) -> None:
         with self._conn() as conn:
             conn.execute("DELETE FROM sources WHERE id = ?", (source_id,))
