@@ -227,6 +227,17 @@ class Storage:
 
     def remove_source(self, source_id: int) -> None:
         with self._conn() as conn:
+            conn.execute(
+                "DELETE FROM interactions WHERE article_id IN "
+                "(SELECT id FROM articles WHERE source_id = ?)",
+                (source_id,),
+            )
+            conn.execute("DELETE FROM articles WHERE source_id = ?", (source_id,))
+            conn.execute("DELETE FROM source_scores WHERE source_id = ?", (source_id,))
+            conn.execute(
+                "DELETE FROM author_scores WHERE source_id = ?",
+                (source_id,),
+            )
             conn.execute("DELETE FROM sources WHERE id = ?", (source_id,))
 
     # --- articles ---

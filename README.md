@@ -40,7 +40,7 @@ sources: []
 
 ```bash
 # Add an RSS source
-news-reader source-add --name "Meduza" --url https://meduza.io/rss
+news-reader source-add --name "Test" --url https://test.io/rss
 
 # Fetch articles (summarises + embeds them)
 news-reader fetch
